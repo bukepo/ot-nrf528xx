@@ -120,7 +120,7 @@ static uint8_t  sEnergyDetectionChannel;
 static int8_t   sEnergyDetected;
 
 #if OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE
-static uint32_t      sCslPeriod;
+static uint16_t      sCslPeriod;
 static uint32_t      sCslSampleTime;
 static const uint8_t sCslIeHeader[OT_IE_HEADER_SIZE] = {CSL_IE_HEADER_BYTES_LO, CSL_IE_HEADER_BYTES_HI};
 #endif // OPENTHREAD_CONFIG_MAC_CSL_RECEIVER_ENABLE
