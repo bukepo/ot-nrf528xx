@@ -499,6 +499,11 @@ static bool addr_add(const uint8_t * p_addr, uint32_t location, uint8_t data_typ
     return true;
 }
 
+static const uint8_t *ext_ie_data = NULL;
+static uint8_t ext_ie_data_len = 0;
+static const uint8_t *short_ie_data = NULL;
+static uint8_t short_ie_data_len = 0;
+
 /**
  * @brief Remove an address from the address list keeping it in ascending order.
  *
@@ -538,12 +543,18 @@ static bool addr_remove(uint32_t location, uint8_t data_type, bool extended)
                 p_addr_array     = (uint8_t *)m_ie.ext_data;
                 p_addr_array_len = &m_ie.num_of_ext_data;
                 entry_size       = sizeof(ack_ext_ie_data_t);
+
+                ext_ie_data = NULL;
+                ext_ie_data_len = 0;
             }
             else
             {
                 p_addr_array     = (uint8_t *)m_ie.short_data;
                 p_addr_array_len = &m_ie.num_of_short_data;
                 entry_size       = sizeof(ack_short_ie_data_t);
+
+                short_ie_data = NULL;
+                short_ie_data_len = 0;
             }
             break;
 
@@ -573,11 +584,17 @@ static void ie_data_add(uint32_t location, bool extended, const uint8_t * p_data
     {
         memcpy(m_ie.ext_data[location].ie_data.p_data, p_data, data_len);
         m_ie.ext_data[location].ie_data.len = data_len;
+
+        ext_ie_data = m_ie.ext_data[location].ie_data.p_data;
+        ext_ie_data_len = m_ie.ext_data[location].ie_data.len;
     }
     else
     {
         memcpy(m_ie.short_data[location].ie_data.p_data, p_data, data_len);
         m_ie.short_data[location].ie_data.len = data_len;
+
+        short_ie_data = m_ie.short_data[location].ie_data.p_data;
+        short_ie_data_len = m_ie.short_data[location].ie_data.len;
     }
 }
 
@@ -736,7 +753,12 @@ const uint8_t * nrf_802154_ack_data_ie_get(const uint8_t * p_src_addr,
     }
     else
     {
-        *p_ie_length = 0;
-        return NULL;
+        if (src_addr_extended) {
+            *p_ie_length = ext_ie_data_len;
+            return ext_ie_data;
+        } else {
+            *p_ie_length = short_ie_data_len;
+            return short_ie_data;
+        }
     }
 }

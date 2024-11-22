@@ -43,6 +43,7 @@
 
 #include <openthread/link.h>
 
+#include "openthread/platform/logging.h"
 #include "utils/code_utils.h"
 #include "utils/link_metrics.h"
 #include "utils/mac_frame.h"
@@ -1406,6 +1407,8 @@ otError otPlatRadioEnableCsl(otInstance         *aInstance,
 {
     sCslPeriod = aCslPeriod;
 
+    otPlatLog(OT_LOG_LEVEL_CRIT, OT_LOG_REGION_PLATFORM, "Enable CSL short addr 0x%04x period %u", aShortAddr,
+              aCslPeriod);
     updateIeData(aInstance, aShortAddr, aExtAddr);
 
     return OT_ERROR_NONE;
