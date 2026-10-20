@@ -96,6 +96,23 @@ enum
 
 static bool sDisabled;
 
+#if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
+// Whether continuous reception is requested (`otPlatRadioReceive()` until `otPlatRadioSleep()`).
+// Read in the driver callbacks.
+static volatile bool sReceiveRequested;
+
+// The last receive window requested by `otPlatRadioReceiveAt()`. It is deferred (not scheduled
+// in the driver) while continuous reception is requested, since continuous reception takes
+// precedence, and scheduled once the radio returns to Sleep.
+static struct
+{
+    uint32_t mStart;
+    uint32_t mDuration;
+    uint8_t  mChannel;
+    bool     mIsDeferred;
+} sTimedRx;
+#endif
+
 static otError      sReceiveError = OT_ERROR_NONE;
 static otRadioFrame sReceivedFrames[NRF_802154_RX_BUFFERS];
 static otRadioFrame sTransmitFrame;
@@ -492,12 +509,26 @@ otError otPlatRadioDisable(otInstance *aInstance)
 
 #if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
     // Disabling the radio cancels any scheduled or ongoing receive window.
+    sReceiveRequested    = false;
+    sTimedRx.mIsDeferred = false;
     nrf_802154_receive_at_cancel();
 #endif
 
 exit:
     return error;
 }
+
+#if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
+static bool scheduleTimedRx(void)
+{
+    nrf_802154_tx_power_set(GetTransmitPowerForChannel(sTimedRx.mChannel));
+
+    // The driver replaces a scheduled window which has not started yet, and updates an ongoing
+    // window without interrupting the reception. A window whose start time has passed starts
+    // immediately (with its original end), and a window which has already ended is rejected.
+    return nrf_802154_receive_at(sTimedRx.mStart - SAFE_DELTA, SAFE_DELTA, sTimedRx.mDuration, sTimedRx.mChannel);
+}
+#endif
 
 otError otPlatRadioSleep(otInstance *aInstance)
 {
@@ -514,6 +545,18 @@ otError otPlatRadioSleep(otInstance *aInstance)
         setPendingEvent(kPendingEventSleep);
     }
 
+#if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
+    sReceiveRequested = false;
+
+    // A receive window deferred by continuous reception starts (or resumes for its remaining
+    // duration) now that the radio returns to Sleep.
+    if (sTimedRx.mIsDeferred)
+    {
+        sTimedRx.mIsDeferred = false;
+        (void)scheduleTimedRx();
+    }
+#endif
+
     return OT_ERROR_NONE;
 }
 
@@ -522,6 +565,16 @@ otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel)
     OT_UNUSED_VARIABLE(aInstance);
 
     bool result;
+
+#if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
+    // Continuous reception takes precedence over a receive window, which is deferred until the
+    // radio returns to Sleep. Cancelling an ongoing window keeps the radio receiving, without
+    // reporting the window timeout.
+    if (nrf_802154_receive_at_cancel())
+    {
+        sTimedRx.mIsDeferred = true;
+    }
+#endif
 
     nrf_802154_channel_set(aChannel);
     if (nrf_802154_state_get() == NRF_802154_STATE_SLEEP)
@@ -534,6 +587,10 @@ otError otPlatRadioReceive(otInstance *aInstance, uint8_t aChannel)
     result = nrf_802154_receive();
     clearPendingEvents();
 
+#if OPENTHREAD_CONFIG_THREAD_VERSION >= OT_THREAD_VERSION_1_2
+    sReceiveRequested = result;
+#endif
+
     return result ? OT_ERROR_NONE : OT_ERROR_INVALID_STATE;
 }
 
@@ -544,11 +601,16 @@ otError otPlatRadioReceiveAt(otInstance *aInstance, uint8_t aChannel, uint32_t a
 
     otEXPECT_ACTION(otPlatRadioIsEnabled(aInstance), error = OT_ERROR_INVALID_STATE);
 
-    // The driver replaces a scheduled window which has not started yet, and updates an ongoing
-    // window without interrupting the reception.
-    nrf_802154_tx_power_set(GetTransmitPowerForChannel(aChannel));
-    otEXPECT_ACTION(nrf_802154_receive_at(aStart - SAFE_DELTA, SAFE_DELTA, aDuration, aChannel),
-                    error = OT_ERROR_FAILED);
+    sTimedRx.mStart      = aStart;
+    sTimedRx.mDuration   = aDuration;
+    sTimedRx.mChannel    = aChannel;
+    sTimedRx.mIsDeferred = sReceiveRequested;
+
+    // Continuous reception takes precedence: the window is scheduled when the radio returns to
+    // Sleep (see `otPlatRadioSleep()`).
+    otEXPECT(!sTimedRx.mIsDeferred);
+
+    otEXPECT_ACTION(scheduleTimedRx(), error = OT_ERROR_FAILED);
 
 exit:
     return error;
@@ -1089,7 +1151,12 @@ void nrf_802154_receive_failed(nrf_802154_rx_error_t error)
     if ((error == NRF_802154_RX_ERROR_DELAYED_TIMEOUT) || (error == NRF_802154_RX_ERROR_TIMESLOT_ENDED))
     {
         sReceiveError = OT_ERROR_NONE;
-        setPendingEvent(kPendingEventSleep);
+
+        // The end of a receive window does not end continuous reception.
+        if (!sReceiveRequested)
+        {
+            setPendingEvent(kPendingEventSleep);
+        }
     }
     else
 #endif
